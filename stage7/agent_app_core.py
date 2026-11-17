@@ -24,7 +24,7 @@ def memory_stats() -> dict:
 
 
 def recall(query: str, top_k: int = 5) -> list:
-    raw = BASE6.recall_memories(query=query, top_k=top_k)
+    raw = BASE6.recall_memories(query=query, limit=top_k)
     try:
         return json.loads(raw).get("results", [])
     except Exception:
