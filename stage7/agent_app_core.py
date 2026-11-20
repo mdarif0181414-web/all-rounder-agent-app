@@ -6,6 +6,14 @@ import io
 import json
 import os
 import re
+import time
+
+try:  # Neon P1: standard event schema (ui package না থাকলে fallback)
+    from ui.events import make_event
+except Exception:
+    def make_event(event_type, step=0, max_steps=30, **payload):
+        return {"type": event_type, "step": step,
+                "max_steps": max_steps, **payload}
 
 import agent_v13 as v13  # dev-phase tools (v8–v13) patch v7 at import
 v7 = v13.v7
@@ -134,11 +142,22 @@ def build_mission(brief: str) -> str:
         "4. শেষে প্রতিটি file read_text_file দিয়ে যাচাই করবে।")
 
 
-def run_produce(brief: str, log=None) -> dict:
-    """Produce mission চালিয়ে {report, files, checks} ফেরত দেয়।"""
+def run_produce(brief: str, log=None, on_event=None) -> dict:
+    """Produce mission চালিয়ে {report, files, checks} ফেরত দেয়।
+    Neon P1: on_event থাকলে প্রতিটা ধাপে structured event পাঠায়
+    (ui/events.py schema) — পুরনো log(str) আচরণ অপরিবর্তিত।"""
     def note(msg):
         if log:
             log(msg)
+
+    def emit(event_type, step=0, **payload):
+        if on_event:
+            try:
+                on_event(make_event(event_type, step=step, **payload))
+            except Exception:
+                pass
+
+    emit("run_start", step=0, brief=brief)
 
     config = types.GenerateContentConfig(
         tools=v7.TOOLS, system_instruction=v7.SYSTEM, temperature=0.4,
@@ -163,11 +182,19 @@ def run_produce(brief: str, log=None) -> dict:
                         p.text for p in cand.content.parts
                         if getattr(p, "text", None)).strip()
                     break
+                thought = "".join(
+                    p.text for p in cand.content.parts
+                    if getattr(p, "text", None)).strip()
+                if thought:
+                    emit("thought", step=step, content=thought[:220])
                 parts = []
                 for p in calls:
                     fc = p.function_call
                     fn = v7.TOOL_MAP.get(fc.name)
                     note(f"step {step}: {fc.name}")
+                    emit("tool_start", step=step, tool=fc.name,
+                         args=str(dict(fc.args or {}))[:200])
+                    t0 = time.perf_counter()
                     try:
                         clean = v7.SCHEMAS[fn].model_validate(
                             dict(fc.args or {})).model_dump()
@@ -177,15 +204,42 @@ def run_produce(brief: str, log=None) -> dict:
                             {"status": "error",
                              "error": f"{type(e).__name__}: {e}"},
                             ensure_ascii=False)
+                    dur = round(time.perf_counter() - t0, 2)
+                    is_err = False
+                    try:
+                        parsed = json.loads(result)
+                        is_err = (isinstance(parsed, dict)
+                                  and parsed.get("status") == "error")
+                    except Exception:
+                        pass
+                    if is_err:
+                        emit("tool_error", step=step, tool=fc.name,
+                             error=str(result)[:200])
+                    else:
+                        emit("tool_end", step=step, tool=fc.name,
+                             duration_sec=dur, summary=str(result)[:200])
                     parts.append(types.Part.from_function_response(
                         name=fc.name, response={"result": result}))
                 contents.append(types.Content(role="user", parts=parts))
             files = _collect_files()
-            return {"report": final, "files": files,
-                    "checks": contract_check(files), "brain": model}
+            checks = contract_check(files)
+            for fname in files:
+                emit("deliverable", step=step, path=fname)
+            passed = bool(checks) and all(checks.values())
+            detail = (f"{sum(1 for v in checks.values() if v)}"
+                      f"/{len(checks)}টি check pass")
+            emit("gate_check", step=step,
+                 check_name="Final Contract Check",
+                 passed=passed, detail=detail)
+            return {"report": final, "files": files, "checks": checks,
+                    "brain": model,
+                    "contract_check": {"passed": passed,
+                                       "details": detail}}
         except Exception as e:
             last_err = e
             note(f"{model} ব্যর্থ — fallback")
+            emit("thought", step=0,
+                 content=f"{model} brain ব্যর্থ — পরের brain চেষ্টা করছি")
             continue
     raise RuntimeError(f"সব model ব্যর্থ: {last_err}")
 

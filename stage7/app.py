@@ -23,6 +23,14 @@ try:  # Neon P2: product theme + welcome screen (ব্যর্থ হলেও
 except Exception:
     render_empty_welcome_screen = None
 
+try:  # Neon P1: live production trace renderer
+    from ui.agent_trace import (ProductionTraceRenderer,
+                                render_saved_trace, render_studio_result)
+except Exception:
+    ProductionTraceRenderer = None
+    render_saved_trace = None
+    render_studio_result = None
+
 try:
     import agent_app_core as core
     CORE_ERR = None
@@ -89,40 +97,50 @@ with tab_chat:
 
 with tab_studio:
     st.write("একটা brief দাও — agent research করে পুরো faceless video "
-             "package বানিয়ে দেবে (৫টি deliverable)।")
+             "package বানিয়ে দেবে (৫টি deliverable)। কাজের প্রতিটা ধাপ "
+             "live দেখতে পাবে।")
     brief = st.text_area(
         "Brief",
         value="A small online education channel wants ONE 60–90 second "
               "English faceless explainer video. Pick the best topic from "
               "real YouTube evidence.",
-        height=100)
-    if st.button("🚀 Production চালাও", type="primary"):
-        log_box = st.empty()
-        lines = []
-        def log(msg):
-            lines.append(msg)
-            log_box.code("\n".join(lines[-12:]))
-        with st.spinner("Agent কাজ করছে — কয়েক মিনিট লাগতে পারে…"):
+        height=100, key="studio_brief")
+    if st.button("🚀 Production চালাও", type="primary") and brief.strip():
+        if ProductionTraceRenderer is not None:
+            renderer = ProductionTraceRenderer(max_steps=30)
             try:
-                result = core.run_produce(brief, log=log)
+                result = core.run_produce(
+                    brief.strip(), on_event=renderer.handle_event)
+                trace = renderer.finalize(result)
             except Exception as e:
+                trace = renderer.fail(f"{type(e).__name__}: {e}")
                 result = None
-                st.error(f"Run ব্যর্থ: {type(e).__name__}: {e}")
-        if result:
-            st.success(f"শেষ হয়েছে (brain: {result['brain']})")
-            st.subheader("📋 Contract যাচাই (মাপা, agent-এর দাবি নয়)")
-            for name, ok in result["checks"].items():
-                st.write(("✅ " if ok else "⚠️ ") + name)
-            st.subheader("📦 Deliverables")
-            for fname, content in result["files"].items():
-                with st.expander(f"📄 {fname}"):
-                    st.markdown(content) if fname.endswith(".md") \
-                        else st.code(content)
-                    st.download_button(f"⬇️ {fname}", content,
-                                       file_name=fname, key=f"dl-{fname}")
-            if result["report"]:
-                st.subheader("🏁 Agent-এর report")
-                st.markdown(result["report"])
+            st.session_state["last_studio_trace"] = trace
+            st.session_state["last_studio_result"] = result
+        else:  # renderer না থাকলে পুরনো log পথ (fallback)
+            log_box = st.empty()
+            lines = []
+
+            def log(msg):
+                lines.append(msg)
+                log_box.code("\n".join(lines[-12:]))
+
+            with st.spinner("Agent কাজ করছে — কয়েক মিনিট লাগতে পারে…"):
+                try:
+                    result = core.run_produce(brief, log=log)
+                except Exception as e:
+                    result = None
+                    st.error(f"Run ব্যর্থ: {type(e).__name__}: {e}")
+            if result and render_studio_result:
+                render_studio_result(result)
+            st.session_state["last_studio_result"] = result
+            st.session_state["last_studio_trace"] = []
+    elif st.session_state.get("last_studio_result"):
+        # download/rerun-এও result + trace যেন হারিয়ে না যায় (P1 guardrail)
+        if render_saved_trace:
+            render_saved_trace(st.session_state.get("last_studio_trace", []))
+        if render_studio_result:
+            render_studio_result(st.session_state["last_studio_result"])
 
 with tab_mem:
     st.write(f"মোট memory: **{stats['count']}**টি ({stats['backend']})")
