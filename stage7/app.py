@@ -1,6 +1,7 @@
 # All-Rounder Agent — Stage 7 web app (Streamlit, free stack)।
 # Key শুধু env/secrets থেকে আসে; code-এ কখনো নয় (A3)।
 import os
+import time
 
 import streamlit as st
 
@@ -15,6 +16,12 @@ os.environ.setdefault("STAGE2_APPROVAL", "deny")
 
 st.set_page_config(page_title="All-Rounder Agent", page_icon="🤖",
                    layout="centered")
+
+try:  # Neon P2: product theme + welcome screen (ব্যর্থ হলেও app চলবে)
+    from ui.theme import apply_pro_theme, render_empty_welcome_screen
+    apply_pro_theme()
+except Exception:
+    render_empty_welcome_screen = None
 
 try:
     import agent_app_core as core
@@ -53,15 +60,21 @@ with tab_chat:
     if st.button("🧹 Chat পরিষ্কার করো"):
         st.session_state.history = []
         st.rerun()
+    starter = None
+    if not st.session_state.history and render_empty_welcome_screen:
+        starter = render_empty_welcome_screen()
     for role, text in st.session_state.history:
         with st.chat_message(role):
             st.markdown(text)
     q = st.chat_input("Agent-কে কিছু জিজ্ঞেস করো…")
+    if not q and starter:
+        q = starter
     if q:
         st.session_state.history.append(("user", q))
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
+            t0 = time.time()
             try:
                 if hasattr(core, "chat_answer_stream"):
                     ans = st.write_stream(core.chat_answer_stream(q))
@@ -71,6 +84,7 @@ with tab_chat:
             except Exception as e:
                 ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
                 st.markdown(ans)
+            st.caption(f"⚡ {time.time() - t0:.1f} সেকেন্ডে উত্তর তৈরি")
         st.session_state.history.append(("assistant", ans))
 
 with tab_studio:

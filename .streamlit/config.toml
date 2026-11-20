@@ -1,0 +1,11 @@
+# All-Rounder Agent — product theme (Neon P2, 2026-11-20)
+[theme]
+base = "dark"
+primaryColor = "#6366F1"
+backgroundColor = "#0B0F19"
+secondaryBackgroundColor = "#131926"
+textColor = "#E5E7EB"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
