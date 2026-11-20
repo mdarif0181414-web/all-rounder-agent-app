@@ -7,7 +7,8 @@ import json
 import os
 import re
 
-import agent_v7 as v7
+import agent_v13 as v13  # dev-phase tools (v8–v13) patch v7 at import
+v7 = v13.v7
 from google.genai import types
 
 BASE6 = v7.base6
