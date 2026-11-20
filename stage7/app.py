@@ -31,6 +31,15 @@ except Exception:
     render_saved_trace = None
     render_studio_result = None
 
+try:  # Neon P3: persistent chat history (Supabase)
+    from chat_store import get_cached_chat_store
+    from ui.chat_sidebar import (refresh_sessions_cache,
+                                 render_chat_sidebar)
+except Exception:
+    get_cached_chat_store = None
+    render_chat_sidebar = None
+    refresh_sessions_cache = None
+
 try:
     import agent_app_core as core
     CORE_ERR = None
@@ -59,26 +68,67 @@ with st.sidebar:
                  "ছাড়া বাকি সব চলবে)")
     st.write("🔑 Brain: Gemini (free tier)")
 
+chat_store = None
+if get_cached_chat_store is not None and render_chat_sidebar is not None:
+    try:
+        chat_store = get_cached_chat_store()
+        render_chat_sidebar(chat_store, messages_key="history",
+                            user_id="owner")
+    except Exception:
+        chat_store = None
+
+
+def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
+    """উত্তর শেষ হওয়ার পর Supabase-এ নীরবে সেভ — ব্যর্থ হলেও chat
+    ভাঙে না (Neon P3: lazy session creation, hybrid cache)।"""
+    if chat_store is None or not chat_store.is_configured():
+        return
+    try:
+        sid = st.session_state.get("active_session_id")
+        created_new = False
+        if not sid:
+            new_sess = chat_store.create_session(title=user_prompt,
+                                                 user_id="owner")
+            if new_sess:
+                sid = new_sess["id"]
+                st.session_state["active_session_id"] = sid
+                created_new = True
+        if sid:
+            chat_store.append_message(sid, "user", user_prompt)
+            chat_store.append_message(
+                sid, "assistant", assistant_reply,
+                meta={"elapsed_sec": round(float(elapsed_sec), 2)})
+            if refresh_sessions_cache and (
+                    created_new
+                    or st.session_state.get("chat_sessions_cache")
+                    is not None):
+                refresh_sessions_cache(chat_store, user_id="owner")
+    except Exception as exc:
+        st.toast(f"হিস্ট্রি সেভ হয়নি (লোকালি আছে): {exc}", icon="⚠️")
+
+
 tab_chat, tab_studio, tab_mem = st.tabs(
     ["💬 Chat", "🎬 Production Studio", "🧠 Memory"])
 
 with tab_chat:
     if "history" not in st.session_state:
         st.session_state.history = []
-    if st.button("🧹 Chat পরিষ্কার করো"):
-        st.session_state.history = []
-        st.rerun()
     starter = None
     if not st.session_state.history and render_empty_welcome_screen:
         starter = render_empty_welcome_screen()
-    for role, text in st.session_state.history:
-        with st.chat_message(role):
-            st.markdown(text)
+    for msg in st.session_state.history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            meta = msg.get("meta") or {}
+            if (msg["role"] == "assistant"
+                    and meta.get("elapsed_sec") is not None):
+                st.caption(f"⚡ {meta['elapsed_sec']} সেকেন্ডে উত্তর তৈরি")
     q = st.chat_input("Agent-কে কিছু জিজ্ঞেস করো…")
     if not q and starter:
         q = starter
     if q:
-        st.session_state.history.append(("user", q))
+        st.session_state.history.append(
+            {"role": "user", "content": q, "meta": {}})
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
@@ -92,8 +142,12 @@ with tab_chat:
             except Exception as e:
                 ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
                 st.markdown(ans)
-            st.caption(f"⚡ {time.time() - t0:.1f} সেকেন্ডে উত্তর তৈরি")
-        st.session_state.history.append(("assistant", ans))
+            elapsed = round(time.time() - t0, 1)
+            st.caption(f"⚡ {elapsed} সেকেন্ডে উত্তর তৈরি")
+        st.session_state.history.append(
+            {"role": "assistant", "content": ans,
+             "meta": {"elapsed_sec": elapsed}})
+        persist_turn_safely(q, ans, elapsed)
 
 with tab_studio:
     st.write("একটা brief দাও — agent research করে পুরো faceless video "
