@@ -48,7 +48,19 @@ def _gen_text(prompt: str) -> str:
     raise RuntimeError(f"সব model ব্যর্থ: {last_err}")
 
 
-def chat_answer(question: str) -> str:
+# --- Chat (A1 speed fix, 2026-11-20) -------------------------------------
+# আগের পথে উত্তর ৫–১০ মিনিট লাগত: _gen প্রতিটা model-এ ২ বার retry +
+# 60s timeout — model overload-এ সময় গুণ হয়ে যেত। এখন: দ্রুততম model
+# আগে, প্রতিটায় মাত্র ১টা চেষ্টা, আর streaming — উত্তর শব্দ ধরে ধরে আসে।
+CHAT_MODELS = list(reversed(BASE6.MODELS))  # flash-lite → 3.5 → 3.8
+CHAT_SYSTEM = (
+    "তুমি All-Rounder Agent — ব্যবহারকারীর নিজের autonomous AI agent। "
+    "সংক্ষেপে, পরিষ্কারভাবে উত্তর দাও। memory থেকে তথ্য ব্যবহার করলে "
+    "[সূত্র: ...] আকারে সূত্র দাও। যা জানো না, সৎভাবে বলো — বানাবে না। "
+    "ব্যবহারকারী যে ভাষায় লিখেছে, সেই ভাষায় উত্তর দাও।")
+
+
+def _chat_prompt(question: str) -> str:
     results = recall(question)
     if results:
         ctx = "\n".join(f"- {r.get('content', '')} [সূত্র: {r.get('source', '')}]"
@@ -56,12 +68,42 @@ def chat_answer(question: str) -> str:
         mem_block = f"তোমার long-term memory থেকে পাওয়া তথ্য:\n{ctx}"
     else:
         mem_block = "তোমার long-term memory-তে এই প্রশ্নের প্রাসঙ্গিক কিছু নেই।"
-    prompt = (
+    return (
         f"{mem_block}\n\nব্যবহারকারীর প্রশ্ন: {question}\n\n"
         "নিয়ম: memory-র তথ্য ব্যবহার করলে উত্তরে [সূত্র: ...] আকারে সূত্র "
         "দেবে (A6)। memory-তে না থাকলে সৎভাবে বলবে জানো না — বানাবে না। "
         "ব্যবহারকারী যে ভাষায় প্রশ্ন করেছে সেই ভাষায় উত্তর দেবে।")
-    return _gen_text(prompt)
+
+
+def chat_answer_stream(question: str):
+    """Streaming chat উত্তর — token আসার সাথে সাথে yield করে।
+    এক model ব্যর্থ হলে পরেরটা; সব ব্যর্থ হলে ভদ্র বাংলা error।"""
+    prompt = _chat_prompt(question)
+    config = types.GenerateContentConfig(
+        system_instruction=CHAT_SYSTEM, temperature=0.4)
+    contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+    for model in CHAT_MODELS:
+        yielded = False
+        try:
+            stream = BASE6.client().models.generate_content_stream(
+                model=model, contents=contents, config=config)
+            for chunk in stream:
+                if getattr(chunk, "text", None):
+                    yielded = True
+                    yield chunk.text
+            if yielded:
+                return
+        except Exception:
+            if yielded:
+                yield "\n\n⚠️ (উত্তরের মাঝে সংযোগ বিচ্ছিন্ন হয়েছে — আবার চেষ্টা করো)"
+                return
+            continue
+    yield ("⚠️ এখন সব brain-ই ব্যস্ত/অধিগম্য নয় (free tier-এর ভিড়)। "
+           "একটু পরে আবার চেষ্টা করো।")
+
+
+def chat_answer(question: str) -> str:
+    return "".join(chat_answer_stream(question))
 
 
 def build_mission(brief: str) -> str:

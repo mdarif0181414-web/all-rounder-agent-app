@@ -25,7 +25,7 @@ except Exception as e:
 
 st.title("🤖 All-Rounder Agent")
 st.caption("তোমার নিজের autonomous agent — chat, video production, memory। "
-           "Free version (Stage 7 v1)")
+           "Development version (streaming chat)")
 
 if CORE_ERR:
     st.error(f"Agent core চালু হয়নি: {CORE_ERR}")
@@ -50,6 +50,9 @@ tab_chat, tab_studio, tab_mem = st.tabs(
 with tab_chat:
     if "history" not in st.session_state:
         st.session_state.history = []
+    if st.button("🧹 Chat পরিষ্কার করো"):
+        st.session_state.history = []
+        st.rerun()
     for role, text in st.session_state.history:
         with st.chat_message(role):
             st.markdown(text)
@@ -59,12 +62,11 @@ with tab_chat:
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
-            with st.spinner("ভাবছি…"):
-                try:
-                    ans = core.chat_answer(q)
-                except Exception as e:
-                    ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
-            st.markdown(ans)
+            try:
+                ans = st.write_stream(core.chat_answer_stream(q))
+            except Exception as e:
+                ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
+                st.markdown(ans)
         st.session_state.history.append(("assistant", ans))
 
 with tab_studio:
