@@ -63,7 +63,11 @@ with tab_chat:
             st.markdown(q)
         with st.chat_message("assistant"):
             try:
-                ans = st.write_stream(core.chat_answer_stream(q))
+                if hasattr(core, "chat_answer_stream"):
+                    ans = st.write_stream(core.chat_answer_stream(q))
+                else:  # পুরনো core cache থাকলে chat যেন ভেঙে না পড়ে
+                    ans = core.chat_answer(q)
+                    st.markdown(ans)
             except Exception as e:
                 ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
                 st.markdown(ans)
