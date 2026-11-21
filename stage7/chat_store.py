@@ -110,6 +110,20 @@ class ChatStore:
         resp.raise_for_status()
         return resp.json() or []
 
+    def update_feedback(self, message_id, feedback):
+        """chat_messages.feedback PostgREST PATCH দিয়ে আপডেট (-1/0/1)।
+        Neon P5: 👍/👎 sync।"""
+        if not self.is_configured() or not message_id:
+            return False
+        if feedback not in (-1, 0, 1):
+            raise ValueError("feedback must be -1, 0, or 1")
+        resp = self.http.patch(
+            self._url("chat_messages"), headers=self._headers(),
+            params={"id": f"eq.{message_id}"},
+            json={"feedback": int(feedback)}, timeout=self.timeout)
+        resp.raise_for_status()
+        return True
+
     def append_message(self, session_id, role, content, meta=None,
                        tool_trace=None):
         if not self.is_configured() or not session_id:

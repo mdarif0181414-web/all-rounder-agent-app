@@ -83,14 +83,30 @@ def _chat_prompt(question: str) -> str:
         "ব্যবহারকারী যে ভাষায় প্রশ্ন করেছে সেই ভাষায় উত্তর দেবে।")
 
 
-def chat_answer_stream(question: str):
+def remember_fact(content: str, source: str = "FEEDBACK") -> bool:
+    """Lesson/fact long-term memory-তে সেভ (Neon P5 feedback পথ)।
+    ব্যর্থ হলে exception — caller সিদ্ধান্ত নেবে।"""
+    BASE6.remember(content, source)
+    return True
+
+
+def chat_answer_stream(question: str, models=None, image_parts=None):
     """Streaming chat উত্তর — token আসার সাথে সাথে yield করে।
-    এক model ব্যর্থ হলে পরেরটা; সব ব্যর্থ হলে ভদ্র বাংলা error।"""
+    এক model ব্যর্থ হলে পরেরটা; সব ব্যর্থ হলে ভদ্র বাংলা error।
+    Neon P5: models = brain switcher chain; image_parts = smart input
+    ছবি ([{name, mime_type, bytes}])।"""
     prompt = _chat_prompt(question)
     config = types.GenerateContentConfig(
         system_instruction=CHAT_SYSTEM, temperature=0.4)
-    contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-    for model in CHAT_MODELS:
+    parts = [types.Part(text=prompt)]
+    for img in (image_parts or []):
+        try:
+            parts.append(types.Part.from_bytes(
+                data=img["bytes"], mime_type=img["mime_type"]))
+        except Exception:
+            continue
+    contents = [types.Content(role="user", parts=parts)]
+    for model in (models or CHAT_MODELS):
         yielded = False
         try:
             stream = BASE6.client().models.generate_content_stream(
@@ -110,8 +126,9 @@ def chat_answer_stream(question: str):
            "একটু পরে আবার চেষ্টা করো।")
 
 
-def chat_answer(question: str) -> str:
-    return "".join(chat_answer_stream(question))
+def chat_answer(question: str, models=None, image_parts=None) -> str:
+    return "".join(chat_answer_stream(question, models=models,
+                                      image_parts=image_parts))
 
 
 def build_mission(brief: str) -> str:

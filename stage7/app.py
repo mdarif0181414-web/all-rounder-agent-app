@@ -48,6 +48,20 @@ except Exception:
     render_chat_workspace = None
     render_studio_workspace = None
 
+try:  # Neon P5: brain switcher + smart input + feedback bar
+    from ui.controls import (build_augmented_prompt, parse_chat_submission,
+                             process_uploaded_files, render_brain_switcher,
+                             render_feedback_bar, render_smart_chat_input,
+                             resolve_model_chain)
+except Exception:
+    build_augmented_prompt = None
+    parse_chat_submission = None
+    process_uploaded_files = None
+    render_brain_switcher = None
+    render_feedback_bar = None
+    render_smart_chat_input = None
+    resolve_model_chain = None
+
 try:
     import agent_app_core as core
     CORE_ERR = None
@@ -88,9 +102,10 @@ if get_cached_chat_store is not None and render_chat_sidebar is not None:
 
 def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
     """উত্তর শেষ হওয়ার পর Supabase-এ নীরবে সেভ — ব্যর্থ হলেও chat
-    ভাঙে না (Neon P3: lazy session creation, hybrid cache)।"""
+    ভাঙে না (Neon P3: lazy session creation, hybrid cache)।
+    ফেরত দেয় assistant message-এর DB id (feedback PATCH-এর জন্য)।"""
     if chat_store is None or not chat_store.is_configured():
-        return
+        return None
     try:
         sid = st.session_state.get("active_session_id")
         created_new = False
@@ -103,7 +118,7 @@ def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
                 created_new = True
         if sid:
             chat_store.append_message(sid, "user", user_prompt)
-            chat_store.append_message(
+            row = chat_store.append_message(
                 sid, "assistant", assistant_reply,
                 meta={"elapsed_sec": round(float(elapsed_sec), 2)})
             if refresh_sessions_cache and (
@@ -111,8 +126,21 @@ def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
                     or st.session_state.get("chat_sessions_cache")
                     is not None):
                 refresh_sessions_cache(chat_store, user_id="owner")
+            return (row or {}).get("id")
     except Exception as exc:
         st.toast(f"হিস্ট্রি সেভ হয়নি (লোকালি আছে): {exc}", icon="⚠️")
+    return None
+
+
+brain_mode = "auto"
+if render_brain_switcher is not None:
+    try:
+        with st.sidebar:
+            st.divider()
+            st.caption("🧠 উত্তরের ধরন (Brain)")
+            brain_mode = render_brain_switcher()
+    except Exception:
+        brain_mode = "auto"
 
 
 tab_chat, tab_studio, tab_mem = st.tabs(
@@ -136,6 +164,9 @@ with tab_chat:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
                 meta = msg.get("meta") or {}
+                for att in (meta.get("attachments_meta") or []):
+                    st.caption(f"📎 {att.get('name', '')} "
+                               f"({att.get('size_kb', '?')} KB)")
                 if msg["role"] == "assistant":
                     if meta.get("elapsed_sec") is not None:
                         st.caption(
@@ -148,21 +179,65 @@ with tab_chat:
                             st.session_state["chat_active_artifact"] = \
                                 detected
                             st.rerun()
-        q = st.chat_input("Agent-কে কিছু জিজ্ঞেস করো…")
+                    if render_feedback_bar is not None:
+                        prev_q = ""
+                        if (idx > 0 and st.session_state.history[idx - 1]
+                                ["role"] == "user"):
+                            prev_q = (st.session_state.history[idx - 1]
+                                      ["content"])
+                        render_feedback_bar(
+                            idx, msg, prev_q, chat_store,
+                            remember_fn=getattr(core, "remember_fact",
+                                                None))
+        if render_smart_chat_input is not None:
+            submission = render_smart_chat_input(
+                "Agent-কে কিছু জিজ্ঞেস করো… বা ফাইল/ছবি যুক্ত করো")
+            q, up_files = parse_chat_submission(submission)
+        else:
+            q = st.chat_input("Agent-কে কিছু জিজ্ঞেস করো…") or ""
+            up_files = []
         if not q and starter:
             q = starter
-        if q:
+        if q or up_files:
+            bundle = (process_uploaded_files(up_files) if up_files else
+                      {"context_text": "", "image_parts": [],
+                       "attachments_meta": [], "warnings": []})
+            for w in bundle["warnings"]:
+                st.warning(w)
+            model_q = (build_augmented_prompt(q, bundle)
+                       if bundle["context_text"] else q)
+            if not model_q.strip():
+                model_q = ("সংযুক্ত ছবি/ফাইলটি বিশ্লেষণ করে মূল "
+                           "বিষয়বস্তু বাংলায় বুঝিয়ে দিন।")
+            display_q = q if q else "📎 সংযুক্ত ফাইল বিশ্লেষণ করো"
             st.session_state.history.append(
-                {"role": "user", "content": q, "meta": {}})
+                {"role": "user", "content": display_q,
+                 "meta": {"attachments_meta": bundle["attachments_meta"]}})
             with st.chat_message("user"):
-                st.markdown(q)
+                st.markdown(display_q)
+                for att in bundle["attachments_meta"]:
+                    st.caption(f"📎 {att.get('name', '')} "
+                               f"({att.get('size_kb', '?')} KB)")
             with st.chat_message("assistant"):
                 t0 = time.time()
+                chain = None
+                if resolve_model_chain is not None:
+                    try:
+                        chain = resolve_model_chain(
+                            brain_mode, list(core.CHAT_MODELS))
+                    except Exception:
+                        chain = None
+                images = bundle["image_parts"] or None
                 try:
                     if hasattr(core, "chat_answer_stream"):
-                        ans = st.write_stream(core.chat_answer_stream(q))
+                        try:
+                            stream = core.chat_answer_stream(
+                                model_q, models=chain, image_parts=images)
+                        except TypeError:  # পুরনো core cache
+                            stream = core.chat_answer_stream(model_q)
+                        ans = st.write_stream(stream)
                     else:  # পুরনো core cache থাকলে chat ভাঙবে না
-                        ans = core.chat_answer(q)
+                        ans = core.chat_answer(model_q)
                         st.markdown(ans)
                 except Exception as e:
                     ans = f"⚠️ উত্তর আসেনি: {type(e).__name__}: {e}"
@@ -171,8 +246,17 @@ with tab_chat:
                 st.caption(f"⚡ {elapsed} সেকেন্ডে উত্তর তৈরি")
             st.session_state.history.append(
                 {"role": "assistant", "content": ans,
-                 "meta": {"elapsed_sec": elapsed}})
-            persist_turn_safely(q, ans, elapsed)
+                 "meta": {"elapsed_sec": elapsed,
+                          "brain_mode": brain_mode},
+                 "feedback": 0})
+            msg_id = persist_turn_safely(display_q, ans, elapsed)
+            if msg_id:
+                st.session_state.history[-1]["id"] = msg_id
+            if render_feedback_bar is not None:
+                render_feedback_bar(
+                    len(st.session_state.history) - 1,
+                    st.session_state.history[-1], display_q, chat_store,
+                    remember_fn=getattr(core, "remember_fact", None))
     if col_ws is not None:
         with col_ws:
             render_chat_workspace()

@@ -64,9 +64,11 @@ def render_chat_sidebar(store, messages_key="history",
                     loaded = store.load_messages(sid)
                     st.session_state["active_session_id"] = sid
                     st.session_state[messages_key] = [
-                        {"role": m["role"], "content": m["content"],
+                        {"id": m.get("id"),
+                         "role": m["role"], "content": m["content"],
                          "meta": m.get("meta") or {},
-                         "tool_trace": m.get("tool_trace") or []}
+                         "tool_trace": m.get("tool_trace") or [],
+                         "feedback": int(m.get("feedback") or 0)}
                         for m in loaded]
                     st.session_state["chat_active_artifact"] = None
                     st.rerun()
