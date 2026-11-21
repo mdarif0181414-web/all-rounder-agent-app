@@ -78,6 +78,11 @@ except Exception:
     get_cached_lessons = None
     invalidate_lessons_cache = None
 
+try:  # Neon Stage 2.2: 24/7 job queue (Mission Control)
+    from job_store import JobStore
+except Exception:
+    JobStore = None
+
 # Neon P6: PIN সেট থাকলে app এখানেই লক — st.stop() swallow করা যাবে না,
 # তাই এই call-এ try/except নেই (নিরাপত্তা)।
 if require_access_gate is not None:
@@ -386,6 +391,67 @@ with tab_studio:
                         for cname, ok in checks.items():
                             st.markdown(
                                 f"{'✅' if ok else '⚠️'} **{cname}**")
+            # Neon Stage 2.2: 24/7 queue — brief কিউতে দিলে GitHub
+            # Actions-এর বড় machine-এ নিজে নিজে চলবে
+            if JobStore is not None:
+                try:
+                    _js = JobStore()
+                except Exception:
+                    _js = None
+                if _js is not None and _js.is_configured():
+                    st.divider()
+                    c_tag, c_queue = st.columns([0.55, 0.45])
+                    project_tag = c_tag.text_input(
+                        "প্রজেক্ট / চ্যানেল ট্যাগ", value="general",
+                        key="studio_project_tag",
+                        label_visibility="collapsed",
+                        placeholder="যেমন: yt_channel_1 বা fiverr_client")
+                    if c_queue.button("⏳ 24/7 কিউতে দিন",
+                                      key="btn_enqueue_247",
+                                      use_container_width=True):
+                        if not brief.strip():
+                            st.warning("আগে একটি ব্রিফ লিখুন।")
+                        else:
+                            try:
+                                created = _js.enqueue_job(
+                                    brief=brief.strip(),
+                                    project_tag=project_tag or "general",
+                                    user_id=current_uid)
+                                if created:
+                                    st.success(
+                                        "✅ 24/7 কিউতে যুক্ত হয়েছে "
+                                        f"(`{created['id'][:8]}`) — পরের "
+                                        "GitHub Actions রানে চলবে!")
+                                else:
+                                    st.warning("কিউতে দেওয়া যায়নি।")
+                            except Exception as exc:
+                                st.warning(
+                                    "কিউ এখনো তৈরি নয় — Supabase-এ "
+                                    f"agent_jobs টেবিল লাগবে ({exc})")
+                    try:
+                        _jobs = _js.list_jobs(user_id=current_uid, limit=8)
+                    except Exception:
+                        _jobs = None
+                    if _jobs is not None:
+                        with st.expander("🤖 24/7 Autonomous Queue "
+                                         "স্ট্যাটাস", expanded=False):
+                            if not _jobs:
+                                st.caption("এখনো কোনো 24/7 জব কিউতে নেই।")
+                            for j in _jobs:
+                                icon = {"pending": "⏳",
+                                        "running": "⚡",
+                                        "completed": "✅",
+                                        "failed": "❌"}.get(
+                                            j["status"], "•")
+                                line = (f"{icon} **[{j['project_tag']}]** "
+                                        f"{j['brief'][:70]}")
+                                if j.get("github_run_url"):
+                                    line += (f" — [Run]"
+                                             f"({j['github_run_url']})")
+                                st.markdown(line)
+                                if j.get("error_message"):
+                                    st.caption(
+                                        f"⚠️ {j['error_message'][:140]}")
         with col_right:
             live_preview_slot.empty()
             render_studio_workspace(
