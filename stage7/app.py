@@ -255,8 +255,7 @@ with tab_chat:
                                       ["content"])
                         render_feedback_bar(
                             idx, msg, prev_q, chat_store,
-                            remember_fn=remember_fn
-                                                None))
+                            remember_fn=remember_fn)
         if render_smart_chat_input is not None:
             submission = render_smart_chat_input(
                 "Agent-কে কিছু জিজ্ঞেস করো… বা ফাইল/ছবি যুক্ত করো")
