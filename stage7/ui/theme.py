@@ -14,7 +14,7 @@ header[data-testid="stHeader"] {
     background: rgba(11,15,25,0.75);
     backdrop-filter: blur(12px);
 }
-.block-container { padding-top: 2rem; padding-bottom: 5rem; max-width: 1200px; }
+.block-container { padding-top: 2rem; padding-bottom: 5rem; max-width: 1480px; }
 [data-testid="stChatMessage"] {
     background: transparent;
     border: 1px solid rgba(255,255,255,0.06);

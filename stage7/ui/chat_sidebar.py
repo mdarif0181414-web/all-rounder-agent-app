@@ -32,6 +32,7 @@ def render_chat_sidebar(store, messages_key="history",
                      use_container_width=True):
             st.session_state["active_session_id"] = None
             st.session_state[messages_key] = []
+            st.session_state["chat_active_artifact"] = None
             st.rerun()
         if not store.is_configured():
             st.caption("💾 লোকাল সেশন মোড (Supabase key set করা নেই)")
@@ -67,6 +68,7 @@ def render_chat_sidebar(store, messages_key="history",
                          "meta": m.get("meta") or {},
                          "tool_trace": m.get("tool_trace") or []}
                         for m in loaded]
+                    st.session_state["chat_active_artifact"] = None
                     st.rerun()
                 except Exception as exc:
                     st.error(f"চ্যাট লোড করতে সমস্যা হয়েছে: {exc}")
@@ -77,6 +79,7 @@ def render_chat_sidebar(store, messages_key="history",
                     if is_active:
                         st.session_state["active_session_id"] = None
                         st.session_state[messages_key] = []
+                        st.session_state["chat_active_artifact"] = None
                     refresh_sessions_cache(store, user_id=user_id)
                     st.rerun()
                 except Exception as exc:

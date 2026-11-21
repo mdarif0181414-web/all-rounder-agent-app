@@ -6,6 +6,11 @@ import time
 
 import streamlit as st
 
+try:  # Neon P4: ডান প্যানেলে live preview placeholder
+    from ui.workspace import render_live_studio_placeholder
+except Exception:
+    render_live_studio_placeholder = None
+
 _TOOL_ICONS = [
     (("youtube", "search", "research", "web"), "🔍"),
     (("browser", "playwright"), "🌐"),
@@ -38,8 +43,10 @@ def _shorten(text, limit=140) -> str:
 
 class ProductionTraceRenderer:
     def __init__(self, max_steps: int = 30,
-                 title: str = "⚡ এজেন্ট প্রোডাকশন মিশন চালাচ্ছে..."):
+                 title: str = "⚡ এজেন্ট প্রোডাকশন মিশন চালাচ্ছে...",
+                 live_preview_slot=None):
         self.max_steps = max_steps
+        self.live_preview_slot = live_preview_slot
         self.start_time = time.perf_counter()
         self.trace_log = []
         self.tool_count = 0
@@ -101,9 +108,15 @@ class ProductionTraceRenderer:
             elif etype == "deliverable":
                 path = str(event.get("path", ""))
                 st.caption(f"📦 ফাইল তৈরি হয়েছে: `{path.split('/')[-1]}`")
+        if (self.live_preview_slot is not None
+                and render_live_studio_placeholder is not None):
+            try:
+                render_live_studio_placeholder(self.live_preview_slot, event)
+            except Exception:
+                pass
 
     # --- completion -----------------------------------------------------
-    def finalize(self, result: dict = None) -> list:
+    def finalize(self, result: dict = None, show_result: bool = True) -> list:
         elapsed = round(time.perf_counter() - self.start_time, 1)
         self.progress_bar.progress(
             1.0, text=f"✅ সম্পন্ন — {self.tool_count}টি টুল • "
@@ -112,7 +125,7 @@ class ProductionTraceRenderer:
             label=f"✅ প্রোডাকশন সম্পন্ন ({self.current_step} ধাপ • "
                   f"{self.tool_count}টি টুল • {elapsed} সেকেন্ড)",
             state="complete", expanded=False)
-        if result:
+        if result and show_result:
             render_studio_result(result)
         return self.trace_log
 
