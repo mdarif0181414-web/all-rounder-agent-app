@@ -90,14 +90,16 @@ def remember_fact(content: str, source: str = "FEEDBACK") -> bool:
     return True
 
 
-def chat_answer_stream(question: str, models=None, image_parts=None):
+def chat_answer_stream(question: str, models=None, image_parts=None,
+                       system_prompt=None):
     """Streaming chat উত্তর — token আসার সাথে সাথে yield করে।
     এক model ব্যর্থ হলে পরেরটা; সব ব্যর্থ হলে ভদ্র বাংলা error।
     Neon P5: models = brain switcher chain; image_parts = smart input
-    ছবি ([{name, mime_type, bytes}])।"""
+    ছবি ([{name, mime_type, bytes}])।
+    Neon P6: system_prompt = Dual-Lane lesson-সহ system instruction।"""
     prompt = _chat_prompt(question)
     config = types.GenerateContentConfig(
-        system_instruction=CHAT_SYSTEM, temperature=0.4)
+        system_instruction=system_prompt or CHAT_SYSTEM, temperature=0.4)
     parts = [types.Part(text=prompt)]
     for img in (image_parts or []):
         try:
@@ -126,9 +128,11 @@ def chat_answer_stream(question: str, models=None, image_parts=None):
            "একটু পরে আবার চেষ্টা করো।")
 
 
-def chat_answer(question: str, models=None, image_parts=None) -> str:
-    return "".join(chat_answer_stream(question, models=models,
-                                      image_parts=image_parts))
+def chat_answer(question: str, models=None, image_parts=None,
+                system_prompt=None) -> str:
+    return "".join(chat_answer_stream(
+        question, models=models, image_parts=image_parts,
+        system_prompt=system_prompt))
 
 
 def build_mission(brief: str) -> str:

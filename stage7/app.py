@@ -62,6 +62,42 @@ except Exception:
     render_smart_chat_input = None
     resolve_model_chain = None
 
+try:  # Neon P6: access gate + health + dual-lane lesson recall
+    from ui.auth import (get_current_user_id, render_logout_button,
+                         require_access_gate)
+    from ui.health import cleanup_temp_media, render_health_popover
+    from lesson_recall import (build_system_prompt_with_lessons,
+                               get_cached_lessons, invalidate_lessons_cache)
+except Exception:
+    get_current_user_id = None
+    render_logout_button = None
+    require_access_gate = None
+    cleanup_temp_media = None
+    render_health_popover = None
+    build_system_prompt_with_lessons = None
+    get_cached_lessons = None
+    invalidate_lessons_cache = None
+
+# Neon P6: PIN সেট থাকলে app এখানেই লক — st.stop() swallow করা যাবে না,
+# তাই এই call-এ try/except নেই (নিরাপত্তা)।
+if require_access_gate is not None:
+    require_access_gate()
+
+if (cleanup_temp_media is not None
+        and not st.session_state.get("_tmp_cleaned")):
+    try:
+        cleanup_temp_media(max_age_minutes=30)
+    except Exception:
+        pass
+    st.session_state["_tmp_cleaned"] = True
+
+current_uid = "owner"
+if get_current_user_id is not None:
+    try:
+        current_uid = get_current_user_id()
+    except Exception:
+        current_uid = "owner"
+
 try:
     import agent_app_core as core
     CORE_ERR = None
@@ -77,6 +113,22 @@ if CORE_ERR:
     st.error(f"Agent core চালু হয়নি: {CORE_ERR}")
     st.info("GEMINI_API_KEY secret/env ঠিকমতো set আছে কিনা দেখো।")
     st.stop()
+
+
+def _remember_with_cache_bust(content, source="FEEDBACK"):
+    """Feedback lesson সেভ + Dual-Lane lesson cache invalidate (P6)।"""
+    result = core.remember_fact(content, source)
+    if invalidate_lessons_cache is not None:
+        try:
+            invalidate_lessons_cache()
+        except Exception:
+            pass
+    return result
+
+
+remember_fn = (_remember_with_cache_bust
+               if core is not None and hasattr(core, "remember_fact")
+               else None)
 
 stats = core.memory_stats()
 with st.sidebar:
@@ -95,7 +147,7 @@ if get_cached_chat_store is not None and render_chat_sidebar is not None:
     try:
         chat_store = get_cached_chat_store()
         render_chat_sidebar(chat_store, messages_key="history",
-                            user_id="owner")
+                            user_id=current_uid)
     except Exception:
         chat_store = None
 
@@ -111,7 +163,7 @@ def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
         created_new = False
         if not sid:
             new_sess = chat_store.create_session(title=user_prompt,
-                                                 user_id="owner")
+                                                 user_id=current_uid)
             if new_sess:
                 sid = new_sess["id"]
                 st.session_state["active_session_id"] = sid
@@ -125,7 +177,7 @@ def persist_turn_safely(user_prompt, assistant_reply, elapsed_sec):
                     created_new
                     or st.session_state.get("chat_sessions_cache")
                     is not None):
-                refresh_sessions_cache(chat_store, user_id="owner")
+                refresh_sessions_cache(chat_store, user_id=current_uid)
             return (row or {}).get("id")
     except Exception as exc:
         st.toast(f"হিস্ট্রি সেভ হয়নি (লোকালি আছে): {exc}", icon="⚠️")
@@ -141,6 +193,17 @@ if render_brain_switcher is not None:
             brain_mode = render_brain_switcher()
     except Exception:
         brain_mode = "auto"
+
+if render_health_popover is not None:
+    try:
+        with st.sidebar:
+            st.divider()
+            render_health_popover(
+                list(core.CHAT_MODELS) if core is not None else [])
+            if render_logout_button is not None:
+                render_logout_button()
+    except Exception:
+        pass
 
 
 tab_chat, tab_studio, tab_mem = st.tabs(
@@ -187,7 +250,7 @@ with tab_chat:
                                       ["content"])
                         render_feedback_bar(
                             idx, msg, prev_q, chat_store,
-                            remember_fn=getattr(core, "remember_fact",
+                            remember_fn=remember_fn
                                                 None))
         if render_smart_chat_input is not None:
             submission = render_smart_chat_input(
@@ -228,11 +291,20 @@ with tab_chat:
                     except Exception:
                         chain = None
                 images = bundle["image_parts"] or None
+                sys_prompt = None
+                if (build_system_prompt_with_lessons is not None
+                        and get_cached_lessons is not None):
+                    try:
+                        sys_prompt = build_system_prompt_with_lessons(
+                            core.CHAT_SYSTEM, get_cached_lessons(limit=5))
+                    except Exception:
+                        sys_prompt = None
                 try:
                     if hasattr(core, "chat_answer_stream"):
                         try:
                             stream = core.chat_answer_stream(
-                                model_q, models=chain, image_parts=images)
+                                model_q, models=chain, image_parts=images,
+                                system_prompt=sys_prompt)
                         except TypeError:  # পুরনো core cache
                             stream = core.chat_answer_stream(model_q)
                         ans = st.write_stream(stream)
@@ -256,7 +328,7 @@ with tab_chat:
                 render_feedback_bar(
                     len(st.session_state.history) - 1,
                     st.session_state.history[-1], display_q, chat_store,
-                    remember_fn=getattr(core, "remember_fact", None))
+                    remember_fn=remember_fn)
     if col_ws is not None:
         with col_ws:
             render_chat_workspace()
